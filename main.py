@@ -11,9 +11,11 @@ choppy sideways second half, so the bot is deliberately selective):
     240-minute high AND the last 30 minutes bounced at least 20 bps, buy with
     all cash. This fires rarely (3 bars in the whole dev window) and only
     after a real wash-out plus a confirmed bounce, so it never chases noise.
-  * Fallback entry: from bar 720, at most once a day, a milder dip (80 bps
-    below the 240-minute high) with a 15 bps 30-minute bounce buys half the
-    cash. Insurance so the bot still trades on a day with no big wash-out.
+  * Fallback entry: from bar 720, a milder dip (80 bps below the 240-minute
+    high) with a 15 bps 30-minute bounce buys half the cash. Insurance so the
+    bot still trades on a day with no big wash-out. It re-arms 240 bars after
+    its last entry: if the first fallback trade exits early, a later mild dip
+    can still be traded instead of the bot sitting out the rest of the day.
   * Exits: take profit +200 bps (main) / +100 bps (fallback), trailing stop
     -100 bps / -60 bps from the peak close, or a max hold of 480 / 240 bars,
     whichever comes first. A 30-bar cooldown follows every exit.
@@ -54,8 +56,10 @@ TP_MAIN_BPS = 200
 TRAIL_MAIN_BPS = 100
 HOLD_MAIN_BARS = 480
 
-# Fallback setup: milder dip + bounce, half size, once a day from bar 720.
+# Fallback setup: milder dip + bounce, half size, from bar 720, re-arming
+# 240 bars after its last entry (so an early exit does not end the day).
 FB_FROM_BAR = 720
+FB_REARM_BARS = 240
 DIP_FB_BPS = 80
 BOUNCE_FB_BPS = 15
 TP_FB_BPS = 100
@@ -70,7 +74,7 @@ class Bot:
         self.peak_close = None    # highest close since entry
         self.entry_bar = None     # seq of the bar the current trade was decided on
         self.mode = None          # 'dip' or 'fb'
-        self.fb_used = False
+        self.fb_last_bar = None   # seq of the last fallback entry (re-arms later)
         self.cooldown_until = -1
         self.buy_sent_seq = None  # seq a buy was sent on, awaiting its fill report
 
@@ -147,7 +151,9 @@ class Bot:
             return [{"side": "buy", "symbol": SYMBOL,
                      "notional_quote_units": notional,
                      "max_slippage_bps": MAX_SLIPPAGE_BPS}]
-        if (seq >= FB_FROM_BAR and not self.fb_used
+        if (seq >= FB_FROM_BAR
+                and (self.fb_last_bar is None
+                     or seq - self.fb_last_bar >= FB_REARM_BARS)
                 and dip_bps <= -DIP_FB_BPS and bounce_bps >= BOUNCE_FB_BPS):
             notional = state.cash // 2
             if notional < MIN_NOTIONAL:
@@ -156,7 +162,7 @@ class Bot:
             self.peak_close = close
             self.entry_bar = seq
             self.mode = "fb"
-            self.fb_used = True
+            self.fb_last_bar = seq
             self.buy_sent_seq = seq
             return [{"side": "buy", "symbol": SYMBOL,
                      "notional_quote_units": notional,
